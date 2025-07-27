@@ -5,6 +5,10 @@ import json
 import sys
 import os
 from decimal import Decimal
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 class DynamoDBUploader:
     def __init__(self, config):
@@ -72,6 +76,26 @@ class DynamoDBUploader:
         print(f"✓ Table '{self.table_name}' created successfully")
         return table
     
+    def get_table_item_count(self):
+        """Get approximate item count in table"""
+        try:
+            response = self.table.scan(Select='COUNT')
+            return response['Count']
+        except Exception:
+            return 0
+    
+    def check_data_exists(self, sample_keys):
+        """Check if sample data already exists in table"""
+        try:
+            existing_count = 0
+            for key in sample_keys[:5]:  # Check first 5 items
+                response = self.table.get_item(Key={self.primary_key_column: key})
+                if 'Item' in response:
+                    existing_count += 1
+            return existing_count > 0
+        except Exception:
+            return False
+    
     def ensure_table_exists(self):
         """Ensure table exists, create if it doesn't"""
         if self.table_exists():
@@ -91,11 +115,20 @@ class DynamoDBUploader:
     
     def convert_to_dynamodb_format(self, item):
         """Convert pandas data types to DynamoDB compatible format"""
+        import datetime
         for key, value in item.items():
             if pd.isna(value):
                 item[key] = None
             elif isinstance(value, float):
                 item[key] = Decimal(str(value))
+            elif isinstance(value, int):
+                item[key] = int(value)  # Keep integers as integers
+            elif isinstance(value, (datetime.datetime, datetime.date)):
+                item[key] = value.strftime('%Y-%m-%d %H:%M:%S')
+            elif isinstance(value, pd.Timestamp):
+                item[key] = value.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                item[key] = str(value)  # Convert everything else to string
         return item
     
     def upload_file(self, file_path):
@@ -109,14 +142,26 @@ class DynamoDBUploader:
                 raise ValueError("Unsupported file format. Use CSV or XLSX.")
             
             print(f"Loaded {len(df)} rows from {file_path}")
+            print(f"Available columns: {list(df.columns)}")
             
             # Validate primary key column exists in data
             if self.primary_key_column not in df.columns:
-                raise ValueError(f"Primary key column '{self.primary_key_column}' not found in file")
+                raise ValueError(f"Primary key column '{self.primary_key_column}' not found in file. Available columns: {list(df.columns)}")
             
             # Create table if it doesn't exist
             if self.table is None:
                 self.table = self.create_table(df)
+            
+            # Check for existing data to avoid redundancy
+            table_count = self.get_table_item_count()
+            if table_count > 0:
+                print(f"Table contains {table_count} items. Checking for data overlap...")
+                sample_keys = df[self.primary_key_column].head(10).tolist()
+                if self.check_data_exists(sample_keys):
+                    print("⚠️  Data already exists in table. Skipping upload to avoid redundancy.")
+                    return
+                else:
+                    print("✓ No data overlap detected. Proceeding with upload.")
             
             # Apply transformation
             df = self.transform_data(df)
@@ -150,8 +195,8 @@ def load_config():
 def main():
     # Check for required environment variables
     if not os.getenv('AWS_ACCESS_KEY_ID') or not os.getenv('AWS_SECRET_ACCESS_KEY'):
-        print("Error: AWS credentials not found in environment variables.")
-        print("Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY")
+        print("Error: AWS credentials not found.")
+        print("Please create a .env file with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY")
         sys.exit(1)
     
     if len(sys.argv) != 2:
