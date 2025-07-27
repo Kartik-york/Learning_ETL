@@ -1,0 +1,9 @@
+{
+    "aws": {
+        "region": "ap-south-1"
+    },
+    "dynamodb": {
+        "table_name": "working_proffessionals",
+        "primary_key_column": "user_id"
+    }
+}
