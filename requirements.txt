@@ -1,4 +1,9 @@
+requests
+beautifulsoup4
+lxml
 pandas
 boto3
 openpyxl
 python-dotenv
+flask
+json
